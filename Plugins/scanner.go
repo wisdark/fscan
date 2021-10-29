@@ -3,7 +3,7 @@ package Plugins
 import (
 	"errors"
 	"fmt"
-	"github.com/shadow1ng/fscan/WebScan"
+	"github.com/shadow1ng/fscan/WebScan/lib"
 	"github.com/shadow1ng/fscan/common"
 	"reflect"
 	"strconv"
@@ -12,41 +12,51 @@ import (
 )
 
 func Scan(info common.HostInfo) {
-	fmt.Println("scan start")
-	Hosts, _ := common.ParseIP(info.Host, common.HostFile)
-	if common.IsPing == false {
-		Hosts = ICMPRun(Hosts, common.Ping)
-		fmt.Println("icmp alive hosts len is:", len(Hosts))
-	}
-	if info.Scantype == "icmp" {
-		return
-	}
-	AlivePorts := TCPportScan(Hosts, info.Ports, info.Timeout)
-	if info.Scantype == "portscan" {
-		return
-	}
-	WebScan.Inithttp(common.Pocinfo)
-	var severports []string //severports := []string{"21","22","135"."445","1433","3306","5432","6379","9200","11211","27017"...}
-	for _, port := range common.PORTList {
-		severports = append(severports, strconv.Itoa(port))
-	}
+	fmt.Println("start infoscan")
+	Hosts, _ := common.ParseIP(info.Host, common.HostFile, common.NoHosts)
+	lib.Inithttp(common.Pocinfo)
 	var ch = make(chan struct{}, common.Threads)
 	var wg = sync.WaitGroup{}
-	for _, targetIP := range AlivePorts {
-		info.Host, info.Ports = strings.Split(targetIP, ":")[0], strings.Split(targetIP, ":")[1]
-		if info.Scantype == "all" {
-			if info.Ports == "445" { //scan more vul
-				AddScan("1000001", info, ch, &wg)
-				AddScan("1000002", info, ch, &wg)
-			} else if IsContain(severports, info.Ports) {
-				AddScan(info.Ports, info, ch, &wg)
+	if len(Hosts) > 0 {
+		if common.IsPing == false {
+			Hosts = ICMPRun(Hosts, common.Ping)
+			fmt.Println("icmp alive hosts len is:", len(Hosts))
+		}
+		if info.Scantype == "icmp" {
+			return
+		}
+		AlivePorts := PortScan(Hosts, info.Ports, info.Timeout)
+		fmt.Println("alive ports len is:", len(AlivePorts))
+		if info.Scantype == "portscan" {
+			return
+		}
+
+		var severports []string //severports := []string{"21","22","135"."445","1433","3306","5432","6379","9200","11211","27017"...}
+		for _, port := range common.PORTList {
+			severports = append(severports, strconv.Itoa(port))
+		}
+		fmt.Println("start vulscan")
+		for _, targetIP := range AlivePorts {
+			info.Host, info.Ports = strings.Split(targetIP, ":")[0], strings.Split(targetIP, ":")[1]
+			if info.Scantype == "all" {
+				switch {
+				case info.Ports == "445":
+					//AddScan(info.Ports, info, ch, &wg)  //smb
+					AddScan("1000001", info, ch, &wg) //ms17010
+					AddScan("1000002", info, ch, &wg) //smbghost
+				case info.Ports == "9000":
+					AddScan(info.Ports, info, ch, &wg) //fcgiscan
+					AddScan("1000003", info, ch, &wg)  //http
+				case IsContain(severports, info.Ports):
+					AddScan(info.Ports, info, ch, &wg) //plugins scan
+				default:
+					AddScan("1000003", info, ch, &wg) //webtitle
+				}
 			} else {
-				AddScan("1000003", info, ch, &wg) //webtitle
+				port, _ := common.PORTList[info.Scantype]
+				scantype := strconv.Itoa(port)
+				AddScan(scantype, info, ch, &wg)
 			}
-		} else {
-			port, _ := common.PortlistBack[info.Scantype]
-			scantype := strconv.Itoa(port)
-			AddScan(scantype, info, ch, &wg)
 		}
 	}
 	if common.URL != "" {
@@ -60,22 +70,24 @@ func Scan(info common.HostInfo) {
 		}
 	}
 	wg.Wait()
-	common.WaitSave()
+	common.LogWG.Wait()
+	close(common.Results)
+	fmt.Println(fmt.Sprintf("已完成 %v/%v", common.End, common.Num))
 }
+
+var Mutex = &sync.Mutex{}
 
 func AddScan(scantype string, info common.HostInfo, ch chan struct{}, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
-		err, _ := ScanFunc(PluginList, scantype, &info)
-		if common.LogErr {
-			tmperr := err[0].Interface()
-			if tmperr != nil {
-				tmperr1 := err[0].Interface().(error)
-				errtext := strings.Replace(tmperr1.Error(), "\n", "", -1)
-				fmt.Println("[-] ", info.Host+":"+info.Ports, errtext)
-			}
-		}
+		Mutex.Lock()
+		common.Num += 1
+		Mutex.Unlock()
+		ScanFunc(PluginList, scantype, &info)
 		wg.Done()
+		Mutex.Lock()
+		common.End += 1
+		Mutex.Unlock()
 		<-ch
 	}()
 	ch <- struct{}{}

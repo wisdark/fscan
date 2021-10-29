@@ -5,29 +5,28 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 func Parse(Info *HostInfo) {
+	ParseScantype(Info)
 	ParseUser(Info)
 	ParsePass(Info)
 	ParseInput(Info)
-	ParseScantype(Info)
 }
 
 func ParseUser(Info *HostInfo) {
-	if Info.Username != "" {
-		users := strings.Split(Info.Username, ",")
-		for _, user := range users {
-			if user != "" {
-				Info.Usernames = append(Info.Usernames, user)
-			}
-		}
-		for name := range Userdict {
-			Userdict[name] = Info.Usernames
-		}
+	if Info.Username == "" && Userfile == "" {
+		return
 	}
+
+	if Info.Username != "" {
+		Info.Usernames = strings.Split(Info.Username, ",")
+	}
+
 	if Userfile != "" {
 		users, err := Readfile(Userfile)
 		if err == nil {
@@ -36,12 +35,13 @@ func ParseUser(Info *HostInfo) {
 					Info.Usernames = append(Info.Usernames, user)
 				}
 			}
-			for name := range Userdict {
-				Userdict[name] = Info.Usernames
-			}
 		}
 	}
 
+	Info.Usernames = RemoveDuplicate(Info.Usernames)
+	for name := range Userdict {
+		Userdict[name] = Info.Usernames
+	}
 }
 
 func ParsePass(Info *HostInfo) {
@@ -106,7 +106,7 @@ func ParseInput(Info *HostInfo) {
 		flag.Usage()
 		os.Exit(0)
 	}
-	//LogErr = Info.Debug
+
 	if TmpOutputfile != "" {
 		if !strings.Contains(Outputfile, "/") && !strings.Contains(Outputfile, `\`) {
 			Outputfile = getpath() + TmpOutputfile
@@ -117,46 +117,54 @@ func ParseInput(Info *HostInfo) {
 	if TmpSave == true {
 		IsSave = false
 	}
+	if Info.Ports == DefaultPorts {
+		Info.Ports += Webport
+	}
 }
 
 func ParseScantype(Info *HostInfo) {
 	_, ok := PORTList[Info.Scantype]
 	if !ok {
-		fmt.Println("The specified scan type does not exist")
-		fmt.Println("-m")
-		for name := range PORTList {
-			fmt.Println("   [" + name + "]")
-		}
-		os.Exit(0)
+		showmode()
 	}
 	if Info.Scantype != "all" {
 		if Info.Ports == DefaultPorts {
 			switch Info.Scantype {
-			case "webtitle":
-				Info.Ports = "80,81,443,7001,8000,8080,8089,9200"
+			case "web":
+				Info.Ports = Webport
 			case "ms17010":
 				Info.Ports = "445"
 			case "cve20200796":
 				Info.Ports = "445"
 			case "portscan":
+				Info.Ports = DefaultPorts
+			case "main":
+				Info.Ports = DefaultPorts
 			default:
 				port, _ := PORTList[Info.Scantype]
 				Info.Ports = strconv.Itoa(port)
 			}
-			fmt.Println("if -m ", Info.Scantype, " only scan the port:", Info.Ports)
+			fmt.Println("-m ", Info.Scantype, " start scan the port:", Info.Ports)
 		}
 	}
 }
 
-func CheckErr(text string, err error) {
+func CheckErr(text string, err error, flag bool) {
 	if err != nil {
-		fmt.Println(text, err.Error())
-		os.Exit(0)
+		fmt.Println("Parse", text, "error: ", err.Error())
+		if flag {
+			if err != ParseIPErr {
+				fmt.Println(ParseIPErr)
+			}
+			os.Exit(0)
+		}
 	}
 }
 
 func getpath() string {
-	filename := os.Args[0]
+	file, _ := exec.LookPath(os.Args[0])
+	path1, _ := filepath.Abs(file)
+	filename := filepath.Dir(path1)
 	var path string
 	if strings.Contains(filename, "/") {
 		tmp := strings.Split(filename, `/`)
@@ -168,4 +176,13 @@ func getpath() string {
 		path = strings.Join(tmp, `\`)
 	}
 	return path
+}
+
+func showmode() {
+	fmt.Println("The specified scan type does not exist")
+	fmt.Println("-m")
+	for name := range PORTList {
+		fmt.Println("   [" + name + "]")
+	}
+	os.Exit(0)
 }

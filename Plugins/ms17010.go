@@ -21,19 +21,26 @@ var (
 
 func MS17010(info *common.HostInfo) error {
 	err := MS17010Scan(info)
+	if err != nil {
+		errlog := fmt.Sprintf("[-] Ms17010 %v %v", info.Host, err)
+		common.LogError(errlog)
+	}
 	return err
 }
 
 func MS17010Scan(info *common.HostInfo) error {
-
 	ip := info.Host
 	// connecting to a host in LAN if reachable should be very quick
 	conn, err := net.DialTimeout("tcp", ip+":445", time.Duration(info.Timeout)*time.Second)
+	defer func() {
+		if conn != nil{
+			conn.Close()
+		}
+	}()
 	if err != nil {
 		//fmt.Printf("failed to connect to %s\n", ip)
 		return err
 	}
-	defer conn.Close()
 	err = conn.SetDeadline(time.Now().Add(time.Duration(info.Timeout) * time.Second))
 	if err != nil {
 		//fmt.Printf("failed to connect to %s\n", ip)
@@ -77,7 +84,7 @@ func MS17010Scan(info *common.HostInfo) error {
 		// find byte count
 		byteCount := binary.LittleEndian.Uint16(sessionSetupResponse[7:9])
 		if n != int(byteCount)+45 {
-			fmt.Println("invalid session setup AndX response")
+			fmt.Println("[-]", ip+":445", "ms17010 invalid session setup AndX response")
 		} else {
 			// two continous null bytes indicates end of a unicode string
 			for i := 10; i < len(sessionSetupResponse)-1; i++ {
@@ -137,13 +144,12 @@ func MS17010Scan(info *common.HostInfo) error {
 		}
 
 		if reply[34] == 0x51 {
-			//fmt.Printf("DOUBLEPULSAR SMB IMPLANT in %s\n", ip)
-			result := fmt.Sprintf("DOUBLEPULSAR SMB IMPLANT in %s", ip)
+			result := fmt.Sprintf("[+] %s has DOUBLEPULSAR SMB IMPLANT", ip)
 			common.LogSuccess(result)
 		}
 
 	} else {
-		result := fmt.Sprintf("%s  (%s)", ip, os)
+		result := fmt.Sprintf("[*] %s  (%s)", ip, os)
 		common.LogSuccess(result)
 	}
 	return err

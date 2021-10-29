@@ -2,6 +2,7 @@ package lib
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/md5"
 	"encoding/base64"
 	"fmt"
@@ -11,10 +12,13 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/interpreter/functions"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
+	"io"
+	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,19 +30,19 @@ func NewEnv(c *CustomLib) (*cel.Env, error) {
 func Evaluate(env *cel.Env, expression string, params map[string]interface{}) (ref.Val, error) {
 	ast, iss := env.Compile(expression)
 	if iss.Err() != nil {
-		//fmt.Println("compile: ", iss.Err())
+		//fmt.Printf("compile: ", iss.Err())
 		return nil, iss.Err()
 	}
 
 	prg, err := env.Program(ast)
 	if err != nil {
-		//fmt.Println("Program creation error: %v", err)
+		//fmt.Printf("Program creation error: %v", err)
 		return nil, err
 	}
 
 	out, _, err := prg.Eval(params)
 	if err != nil {
-		//fmt.Println("Evaluation error: %v", err)
+		//fmt.Printf("Evaluation error: %v", err)
 		return nil, err
 	}
 	return out, nil
@@ -123,6 +127,10 @@ func NewEnvOption() CustomLib {
 				decls.NewOverload("randomLowercase_int",
 					[]*exprpb.Type{decls.Int},
 					decls.String)),
+			decls.NewFunction("randomUppercase",
+				decls.NewOverload("randomUppercase_int",
+					[]*exprpb.Type{decls.Int},
+					decls.String)),
 			decls.NewFunction("base64",
 				decls.NewOverload("base64_string",
 					[]*exprpb.Type{decls.String},
@@ -186,7 +194,7 @@ func NewEnvOption() CustomLib {
 				},
 			},
 			&functions.Overload{
-				Operator: "string_bmatch_bytes",
+				Operator: "string_bmatches_bytes",
 				Binary: func(lhs ref.Val, rhs ref.Val) ref.Val {
 					v1, ok := lhs.(types.String)
 					if !ok {
@@ -236,6 +244,16 @@ func NewEnvOption() CustomLib {
 						return types.ValOrErr(value, "unexpected type '%v' passed to randomLowercase", value.Type())
 					}
 					return types.String(randomLowercase(int(n)))
+				},
+			},
+			&functions.Overload{
+				Operator: "randomUppercase_int",
+				Unary: func(value ref.Val) ref.Val {
+					n, ok := value.(types.Int)
+					if !ok {
+						return types.ValOrErr(value, "unexpected type '%v' passed to randomUppercase", value.Type())
+					}
+					return types.String(randomUppercase(int(n)))
 				},
 			},
 			&functions.Overload{
@@ -419,9 +437,15 @@ func (c *CustomLib) UpdateCompileOptions(args map[string]string) {
 	}
 }
 
+var randSource = rand.New(rand.NewSource(time.Now().Unix()))
+
 func randomLowercase(n int) string {
 	lowercase := "abcdefghijklmnopqrstuvwxyz"
-	randSource := rand.New(rand.NewSource(time.Now().Unix()))
+	return RandomStr(randSource, lowercase, n)
+}
+
+func randomUppercase(n int) string {
+	lowercase := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	return RandomStr(randSource, lowercase, n)
 }
 
@@ -445,7 +469,6 @@ func reverseCheck(r *Reverse, timeout int64) bool {
 	return false
 }
 
-
 func RandomStr(randSource *rand.Rand, letterBytes string, n int) string {
 	const (
 		letterIdxBits = 6                    // 6 bits to represent a letter index
@@ -466,4 +489,115 @@ func RandomStr(randSource *rand.Rand, letterBytes string, n int) string {
 		remain--
 	}
 	return string(randBytes)
+}
+
+func DoRequest(req *http.Request, redirect bool) (*Response, error) {
+	if req.Body == nil || req.Body == http.NoBody {
+	} else {
+		req.Header.Set("Content-Length", strconv.Itoa(int(req.ContentLength)))
+		if req.Header.Get("Content-Type") == "" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	}
+
+	var oResp *http.Response
+	var err error
+	if redirect {
+		oResp, err = Client.Do(req)
+	} else {
+		oResp, err = ClientNoRedirect.Do(req)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer oResp.Body.Close()
+	resp, err := ParseResponse(oResp)
+	if err != nil {
+		return nil, err
+	}
+	return resp, err
+}
+
+func ParseUrl(u *url.URL) *UrlType {
+	nu := &UrlType{}
+	nu.Scheme = u.Scheme
+	nu.Domain = u.Hostname()
+	nu.Host = u.Host
+	nu.Port = u.Port()
+	nu.Path = u.EscapedPath()
+	nu.Query = u.RawQuery
+	nu.Fragment = u.Fragment
+	return nu
+}
+
+func ParseRequest(oReq *http.Request) (*Request, error) {
+	req := &Request{}
+	req.Method = oReq.Method
+	req.Url = ParseUrl(oReq.URL)
+	header := make(map[string]string)
+	for k := range oReq.Header {
+		header[k] = oReq.Header.Get(k)
+	}
+	req.Headers = header
+	req.ContentType = oReq.Header.Get("Content-Type")
+	if oReq.Body == nil || oReq.Body == http.NoBody {
+	} else {
+		data, err := ioutil.ReadAll(oReq.Body)
+		if err != nil {
+			return nil, err
+		}
+		req.Body = data
+		oReq.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+	}
+	return req, nil
+}
+
+func ParseResponse(oResp *http.Response) (*Response, error) {
+	var resp Response
+	header := make(map[string]string)
+	resp.Status = int32(oResp.StatusCode)
+	resp.Url = ParseUrl(oResp.Request.URL)
+	for k := range oResp.Header {
+		header[k] = strings.Join(oResp.Header.Values(k), ";")
+	}
+	resp.Headers = header
+	resp.ContentType = oResp.Header.Get("Content-Type")
+	body, err := getRespBody(oResp)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = body
+	return &resp, nil
+}
+
+func getRespBody(oResp *http.Response) ([]byte, error) {
+	var body []byte
+	if oResp.Header.Get("Content-Encoding") == "gzip" {
+		gr, err := gzip.NewReader(oResp.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer gr.Close()
+		for {
+			buf := make([]byte, 1024)
+			n, err := gr.Read(buf)
+			if err != nil && err != io.EOF {
+				//utils.Logger.Error(err)
+				return nil, err
+			}
+			if n == 0 {
+				break
+			}
+			body = append(body, buf...)
+		}
+	} else {
+		raw, err := ioutil.ReadAll(oResp.Body)
+		if err != nil {
+			//utils.Logger.Error(err)
+			return nil, err
+		}
+		defer oResp.Body.Close()
+		body = raw
+	}
+	return body, nil
 }

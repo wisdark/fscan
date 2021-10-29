@@ -3,33 +3,40 @@ package common
 import (
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
+var Num int64
+var End int64
 var Results = make(chan string)
-var Worker = 0
 var Start = true
 var LogSucTime int64
-var LogErr bool
 var LogErrTime int64
+var WaitTime int64
+var Silent bool
+var LogWG sync.WaitGroup
+
+func init() {
+	go SaveLog()
+}
 
 func LogSuccess(result string) {
-	Worker++
+	LogWG.Add(1)
 	LogSucTime = time.Now().Unix()
-	if Start {
-		go SaveLog()
-		Start = false
-	}
 	Results <- result
 }
 
 func SaveLog() {
 	for result := range Results {
-		fmt.Println(result)
+		if Silent == false || strings.Contains(result, "[+]") || strings.Contains(result, "[*]") {
+			fmt.Println(result)
+		}
 		if IsSave {
 			WriteFile(result, Outputfile)
 		}
-		Worker--
+		LogWG.Done()
 	}
 }
 
@@ -43,24 +50,37 @@ func WriteFile(result string, filename string) {
 	_, err = fl.Write(text)
 	fl.Close()
 	if err != nil {
-		fmt.Printf("write %s error, %v\n", filename, err)
-	}
-}
-
-func WaitSave() {
-	for {
-		if Worker == 0 {
-			close(Results)
-			return
-		}
+		fmt.Printf("Write %s error, %v\n", filename, err)
 	}
 }
 
 func LogError(errinfo interface{}) {
-	if LogErr {
-		if (time.Now().Unix()-LogSucTime) > 10 && (time.Now().Unix()-LogErrTime) > 10 {
-			fmt.Println(errinfo)
-			LogErrTime = time.Now().Unix()
+	if WaitTime == 0 {
+		fmt.Println(fmt.Sprintf("已完成 %v/%v %v", End, Num, errinfo))
+	} else if (time.Now().Unix()-LogSucTime) > WaitTime && (time.Now().Unix()-LogErrTime) > WaitTime {
+		fmt.Println(fmt.Sprintf("已完成 %v/%v %v", End, Num, errinfo))
+		LogErrTime = time.Now().Unix()
+	}
+}
+
+func CheckErrs(err error) bool {
+	if err == nil {
+		return false
+	}
+	errs := []string{
+		"closed by the remote host", "too many connections",
+		"i/o timeout", "EOF", "A connection attempt failed",
+		"established connection failed", "connection attempt failed",
+		"Unable to read", "is not allowed to connect to this",
+		"no pg_hba.conf entry",
+		"No connection could be made",
+		"invalid packet size",
+		"bad connection",
+	}
+	for _, key := range errs {
+		if strings.Contains(strings.ToLower(err.Error()), strings.ToLower(key)) {
+			return true
 		}
 	}
+	return false
 }

