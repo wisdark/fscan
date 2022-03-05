@@ -15,7 +15,7 @@ var (
 	Client           *http.Client
 	ClientNoRedirect *http.Client
 	dialTimout       = 5 * time.Second
-	keepAlive        = 15 * time.Second
+	keepAlive        = 5 * time.Second
 )
 
 func Inithttp(PocInfo common.PocInfo) {
@@ -34,9 +34,9 @@ func InitHttpClient(ThreadsNum int, DownProxy string, Timeout time.Duration) err
 
 	tr := &http.Transport{
 		DialContext:         dialer.DialContext,
-		MaxConnsPerHost:     0,
+		MaxConnsPerHost:     5,
 		MaxIdleConns:        0,
-		MaxIdleConnsPerHost: ThreadsNum * 2,
+		MaxIdleConnsPerHost: 2,
 		IdleConnTimeout:     keepAlive,
 		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 		TLSHandshakeTimeout: 5 * time.Second,

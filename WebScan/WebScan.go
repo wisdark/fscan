@@ -7,6 +7,7 @@ import (
 	"github.com/shadow1ng/fscan/common"
 	"net/http"
 	"strings"
+	"time"
 )
 
 //go:embed pocs
@@ -16,13 +17,29 @@ func WebScan(info *common.HostInfo) {
 	var pocinfo = common.Pocinfo
 	buf := strings.Split(info.Url, "/")
 	pocinfo.Target = strings.Join(buf[:3], "/")
-	if pocinfo.PocName != "" {
-		Execute(pocinfo)
-		return
-	}
-	for _, infostr := range info.Infostr {
-		pocinfo.PocName = lib.CheckInfoPoc(infostr)
-		Execute(pocinfo)
+
+	var flag bool
+	go func() {
+		time.Sleep(60 * time.Second)
+		flag = true
+	}()
+
+	go func() {
+		if pocinfo.PocName != "" {
+			Execute(pocinfo)
+		} else {
+			for _, infostr := range info.Infostr {
+				pocinfo.PocName = lib.CheckInfoPoc(infostr)
+				Execute(pocinfo)
+			}
+		}
+		flag = true
+	}()
+
+	for {
+		if flag {
+			return
+		}
 	}
 }
 

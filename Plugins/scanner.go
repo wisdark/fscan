@@ -13,22 +13,33 @@ import (
 
 func Scan(info common.HostInfo) {
 	fmt.Println("start infoscan")
-	Hosts, _ := common.ParseIP(info.Host, common.HostFile, common.NoHosts)
+	Hosts, err := common.ParseIP(info.Host, common.HostFile, common.NoHosts)
+	if err != nil {
+		fmt.Println("len(hosts)==0", err)
+		return
+	}
 	lib.Inithttp(common.Pocinfo)
 	var ch = make(chan struct{}, common.Threads)
 	var wg = sync.WaitGroup{}
 	if len(Hosts) > 0 {
 		if common.IsPing == false {
-			Hosts = ICMPRun(Hosts, common.Ping)
-			fmt.Println("icmp alive hosts len is:", len(Hosts))
+			Hosts = CheckLive(Hosts, common.Ping)
+			fmt.Println("[*] Icmp alive hosts len is:", len(Hosts))
 		}
 		if info.Scantype == "icmp" {
+			common.LogWG.Wait()
 			return
 		}
-		AlivePorts := PortScan(Hosts, info.Ports, info.Timeout)
-		fmt.Println("alive ports len is:", len(AlivePorts))
-		if info.Scantype == "portscan" {
-			return
+		var AlivePorts []string
+		if info.Scantype == "webonly" {
+			AlivePorts = NoPortScan(Hosts, info.Ports)
+		} else {
+			AlivePorts = PortScan(Hosts, info.Ports, info.Timeout)
+			fmt.Println("[*] alive ports len is:", len(AlivePorts))
+			if info.Scantype == "portscan" {
+				common.LogWG.Wait()
+				return
+			}
 		}
 
 		var severports []string //severports := []string{"21","22","135"."445","1433","3306","5432","6379","9200","11211","27017"...}
@@ -38,8 +49,10 @@ func Scan(info common.HostInfo) {
 		fmt.Println("start vulscan")
 		for _, targetIP := range AlivePorts {
 			info.Host, info.Ports = strings.Split(targetIP, ":")[0], strings.Split(targetIP, ":")[1]
-			if info.Scantype == "all" {
+			if info.Scantype == "all" || info.Scantype == "main" {
 				switch {
+				case info.Ports == "135":
+					AddScan(info.Ports, info, ch, &wg) //findnet
 				case info.Ports == "445":
 					//AddScan(info.Ports, info, ch, &wg)  //smb
 					AddScan("1000001", info, ch, &wg) //ms17010

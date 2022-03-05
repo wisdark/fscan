@@ -10,7 +10,7 @@ import (
 
 var Num int64
 var End int64
-var Results = make(chan string)
+var Results = make(chan *string)
 var Start = true
 var LogSucTime int64
 var LogErrTime int64
@@ -25,16 +25,16 @@ func init() {
 func LogSuccess(result string) {
 	LogWG.Add(1)
 	LogSucTime = time.Now().Unix()
-	Results <- result
+	Results <- &result
 }
 
 func SaveLog() {
 	for result := range Results {
-		if Silent == false || strings.Contains(result, "[+]") || strings.Contains(result, "[*]") {
-			fmt.Println(result)
+		if Silent == false || strings.Contains(*result, "[+]") || strings.Contains(*result, "[*]") {
+			fmt.Println(*result)
 		}
 		if IsSave {
-			WriteFile(result, Outputfile)
+			WriteFile(*result, Outputfile)
 		}
 		LogWG.Done()
 	}
@@ -42,7 +42,7 @@ func SaveLog() {
 
 func WriteFile(result string, filename string) {
 	var text = []byte(result + "\n")
-	fl, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0777)
+	fl, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Printf("Open %s error, %v\n", filename, err)
 		return

@@ -20,6 +20,9 @@ var (
 )
 
 func MS17010(info *common.HostInfo) error {
+	if common.IsBrute {
+		return nil
+	}
 	err := MS17010Scan(info)
 	if err != nil {
 		errlog := fmt.Sprintf("[-] Ms17010 %v %v", info.Host, err)
@@ -33,7 +36,7 @@ func MS17010Scan(info *common.HostInfo) error {
 	// connecting to a host in LAN if reachable should be very quick
 	conn, err := net.DialTimeout("tcp", ip+":445", time.Duration(info.Timeout)*time.Second)
 	defer func() {
-		if conn != nil{
+		if conn != nil {
 			conn.Close()
 		}
 	}()

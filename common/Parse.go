@@ -118,7 +118,29 @@ func ParseInput(Info *HostInfo) {
 		IsSave = false
 	}
 	if Info.Ports == DefaultPorts {
-		Info.Ports += Webport
+		Info.Ports += "," + Webport
+	}
+
+	if PortAdd != "" {
+		if strings.HasSuffix(Info.Ports, ",") {
+			Info.Ports += PortAdd
+		} else {
+			Info.Ports += "," + PortAdd
+		}
+	}
+
+	if UserAdd != "" {
+		user := strings.Split(UserAdd, ",")
+		for a, _ := range Userdict {
+			Userdict[a] = append(Userdict[a], user...)
+			Userdict[a] = RemoveDuplicate(Userdict[a])
+		}
+	}
+
+	if PassAdd != "" {
+		pass := strings.Split(PassAdd, ",")
+		Passwords = append(Passwords, pass...)
+		Passwords = RemoveDuplicate(Passwords)
 	}
 }
 
@@ -130,14 +152,22 @@ func ParseScantype(Info *HostInfo) {
 	if Info.Scantype != "all" {
 		if Info.Ports == DefaultPorts {
 			switch Info.Scantype {
+			case "rdp":
+				Info.Ports = "3389"
+			case "wmi":
+				Info.Ports = "135"
 			case "web":
+				Info.Ports = Webport
+			case "webonly":
 				Info.Ports = Webport
 			case "ms17010":
 				Info.Ports = "445"
 			case "cve20200796":
 				Info.Ports = "445"
+			case "smb2":
+				Info.Ports = "445"
 			case "portscan":
-				Info.Ports = DefaultPorts
+				Info.Ports = DefaultPorts + "," + Webport
 			case "main":
 				Info.Ports = DefaultPorts
 			default:
