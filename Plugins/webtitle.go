@@ -4,19 +4,19 @@ import (
 	"compress/gzip"
 	"crypto/tls"
 	"fmt"
-	"github.com/shadow1ng/fscan/WebScan"
-	"github.com/shadow1ng/fscan/WebScan/lib"
-	"github.com/shadow1ng/fscan/common"
-	"golang.org/x/text/encoding/simplifiedchinese"
 	"io"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/shadow1ng/fscan/WebScan"
+	"github.com/shadow1ng/fscan/WebScan/lib"
+	"github.com/shadow1ng/fscan/common"
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 func WebTitle(info *common.HostInfo) error {
@@ -39,13 +39,13 @@ func GOWebTitle(info *common.HostInfo) (err error, CheckData []WebScan.CheckData
 			info.Url = fmt.Sprintf("https://%s", info.Host)
 		default:
 			host := fmt.Sprintf("%s:%s", info.Host, info.Ports)
-			protocol := GetProtocol(host, info.Timeout)
+			protocol := GetProtocol(host, common.Timeout)
 			info.Url = fmt.Sprintf("%s://%s:%s", protocol, info.Host, info.Ports)
 		}
 	} else {
 		if !strings.Contains(info.Url, "://") {
 			host := strings.Split(info.Url, "/")[0]
-			protocol := GetProtocol(host, info.Timeout)
+			protocol := GetProtocol(host, common.Timeout)
 			info.Url = fmt.Sprintf("%s://%s", protocol, info.Url)
 		}
 	}
@@ -76,8 +76,8 @@ func GOWebTitle(info *common.HostInfo) (err error, CheckData []WebScan.CheckData
 			}
 		}
 	}
-
-	err, _, CheckData = geturl(info, 2, CheckData)
+	//是否访问图标
+	//err, _, CheckData = geturl(info, 2, CheckData)
 	if err != nil {
 		return
 	}
@@ -103,14 +103,15 @@ func geturl(info *common.HostInfo, flag int, CheckData []WebScan.CheckDatas) (er
 	if err != nil {
 		return err, "", CheckData
 	}
-	req.Header.Set("User-agent", "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/28.0.1468.0 Safari/537.36")
+	req.Header.Set("User-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
-	if common.Pocinfo.Cookie != "" {
-		req.Header.Set("Cookie", "rememberMe=1;"+common.Pocinfo.Cookie)
-	} else {
-		req.Header.Set("Cookie", "rememberMe=1")
-	}
+	req.Header.Set("Cookie", common.Cookie)
+	//if common.Pocinfo.Cookie != "" {
+	//	req.Header.Set("Cookie", "rememberMe=1;"+common.Pocinfo.Cookie)
+	//} else {
+	//	req.Header.Set("Cookie", "rememberMe=1")
+	//}
 	req.Header.Set("Connection", "close")
 	var client *http.Client
 	if flag == 1 {
@@ -145,7 +146,7 @@ func geturl(info *common.HostInfo, flag int, CheckData []WebScan.CheckDatas) (er
 		if err1 == nil {
 			reurl = redirURL.String()
 		}
-		result := fmt.Sprintf("[*] WebTitle:%-25v code:%-3v len:%-6v title:%v", resp.Request.URL, resp.StatusCode, length, title)
+		result := fmt.Sprintf("[*] WebTitle: %-25v code:%-3v len:%-6v title:%v", resp.Request.URL, resp.StatusCode, length, title)
 		if reurl != "" {
 			result += fmt.Sprintf(" 跳转url: %s", reurl)
 		}
@@ -190,7 +191,7 @@ func getRespBody(oResp *http.Response) ([]byte, error) {
 }
 
 func gettitle(body []byte) (title string) {
-	re := regexp.MustCompile("(?ims)<title>(.*)</title>")
+	re := regexp.MustCompile("(?ims)<title>(.*?)</title>")
 	find := re.FindSubmatch(body)
 	if len(find) > 1 {
 		title = string(find[1])
@@ -218,13 +219,23 @@ func GetProtocol(host string, Timeout int64) (protocol string) {
 		return
 	}
 
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Duration(Timeout) * time.Second}, "tcp", host, &tls.Config{InsecureSkipVerify: true})
+	socksconn, err := common.WrapperTcpWithTimeout("tcp", host, time.Duration(Timeout)*time.Second)
+	if err != nil {
+		return
+	}
+	conn := tls.Client(socksconn, &tls.Config{InsecureSkipVerify: true})
 	defer func() {
 		if conn != nil {
+			defer func() {
+				if err := recover(); err != nil {
+					common.LogError(err)
+				}
+			}()
 			conn.Close()
 		}
 	}()
-
+	conn.SetDeadline(time.Now().Add(time.Duration(Timeout) * time.Second))
+	err = conn.Handshake()
 	if err == nil || strings.Contains(err.Error(), "handshake failure") {
 		protocol = "https"
 	}

