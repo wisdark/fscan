@@ -33,7 +33,7 @@ func CheckMultiPoc(req *http.Request, pocs []*Poc, workers int) {
 			for task := range tasks {
 				isVul, _, name := executePoc(task.Req, task.Poc)
 				if isVul {
-					result := fmt.Sprintf("[+] %s %s %s", task.Req.URL, task.Poc.Name, name)
+					result := fmt.Sprintf("[+] PocScan %s %s %s", task.Req.URL, task.Poc.Name, name)
 					common.LogSuccess(result)
 				}
 				wg.Done()
@@ -90,7 +90,7 @@ func executePoc(oReq *http.Request, p *Poc) (bool, error, string) {
 		}
 		err, _ = evalset(env, variableMap, k, expression)
 		if err != nil {
-			fmt.Printf("[-] %s evalset error: %v", p.Name, err)
+			fmt.Printf("[-] %s evalset error: %v\n", p.Name, err)
 		}
 	}
 	success := false
@@ -148,8 +148,8 @@ func executePoc(oReq *http.Request, p *Poc) (bool, error, string) {
 		variableMap["response"] = resp
 		// 先判断响应页面是否匹配search规则
 		if rule.Search != "" {
-			result := doSearch(strings.TrimSpace(rule.Search), GetHeader(resp.Headers)+string(resp.Body))
-			if result != nil && len(result) > 0 { // 正则匹配成功
+			result := doSearch(rule.Search, GetHeader(resp.Headers)+string(resp.Body))
+			if len(result) > 0 { // 正则匹配成功
 				for k, v := range result {
 					variableMap[k] = v
 				}
@@ -161,7 +161,6 @@ func executePoc(oReq *http.Request, p *Poc) (bool, error, string) {
 		if err != nil {
 			return false, err
 		}
-		//fmt.Println(fmt.Sprintf("%v, %s", out, out.Type().TypeName()))
 		//如果false不继续执行后续rule
 		// 如果最后一步执行失败，就算前面成功了最终依旧是失败
 		flag, ok = out.Value().(bool)
@@ -202,6 +201,7 @@ func executePoc(oReq *http.Request, p *Poc) (bool, error, string) {
 func doSearch(re string, body string) map[string]string {
 	r, err := regexp.Compile(re)
 	if err != nil {
+		fmt.Println("[-] regexp.Compile error: ", err)
 		return nil
 	}
 	result := r.FindStringSubmatch(body)
@@ -210,7 +210,11 @@ func doSearch(re string, body string) map[string]string {
 		paramsMap := make(map[string]string)
 		for i, name := range names {
 			if i > 0 && i <= len(result) {
-				paramsMap[name] = result[i]
+				if strings.HasPrefix(re, "Set-Cookie:") && strings.Contains(name, "cookie") {
+					paramsMap[name] = optimizeCookies(result[i])
+				} else {
+					paramsMap[name] = result[i]
+				}
 			}
 		}
 		return paramsMap
@@ -218,7 +222,27 @@ func doSearch(re string, body string) map[string]string {
 	return nil
 }
 
+func optimizeCookies(rawCookie string) (output string) {
+	// Parse the cookies
+	parsedCookie := strings.Split(rawCookie, "; ")
+	for _, c := range parsedCookie {
+		nameVal := strings.Split(c, "=")
+		if len(nameVal) >= 2 {
+			switch strings.ToLower(nameVal[0]) {
+			case "expires", "max-age", "path", "domain", "version", "comment", "secure", "samesite", "httponly":
+				continue
+			}
+			output += fmt.Sprintf("%s=%s; ", nameVal[0], strings.Join(nameVal[1:], "="))
+		}
+	}
+
+	return
+}
+
 func newReverse() *Reverse {
+	if !common.DnsLog {
+		return &Reverse{}
+	}
 	letters := "1234567890abcdefghijklmnopqrstuvwxyz"
 	randSource := rand.New(rand.NewSource(time.Now().UnixNano()))
 	sub := RandomStr(randSource, letters, 8)
@@ -229,9 +253,9 @@ func newReverse() *Reverse {
 	urlStr := fmt.Sprintf("http://%s.%s", sub, ceyeDomain)
 	u, _ := url.Parse(urlStr)
 	return &Reverse{
-		Url:                ParseUrl(u),
+		Url:                urlStr,
 		Domain:             u.Hostname(),
-		Ip:                 "",
+		Ip:                 u.Host,
 		IsDomainNameServer: false,
 	}
 }
@@ -332,15 +356,15 @@ func clusterpoc(oReq *http.Request, p *Poc, variableMap map[string]interface{}, 
 			if success {
 				if rule.Continue {
 					if p.Name == "poc-yaml-backup-file" || p.Name == "poc-yaml-sql-file" {
-						common.LogSuccess(fmt.Sprintf("[+] %s://%s%s %s", req.Url.Scheme, req.Url.Host, req.Url.Path, p.Name))
+						common.LogSuccess(fmt.Sprintf("[+] PocScan %s://%s%s %s", req.Url.Scheme, req.Url.Host, req.Url.Path, p.Name))
 					} else {
-						common.LogSuccess(fmt.Sprintf("[+] %s://%s%s %s %v", req.Url.Scheme, req.Url.Host, req.Url.Path, p.Name, tmpMap))
+						common.LogSuccess(fmt.Sprintf("[+] PocScan %s://%s%s %s %v", req.Url.Scheme, req.Url.Host, req.Url.Path, p.Name, tmpMap))
 					}
 					continue
 				}
 				strMap = append(strMap, tmpMap...)
 				if i == len(p.Rules)-1 {
-					common.LogSuccess(fmt.Sprintf("[+] %s://%s%s %s %v", req.Url.Scheme, req.Url.Host, req.Url.Path, p.Name, strMap))
+					common.LogSuccess(fmt.Sprintf("[+] PocScan %s://%s%s %s %v", req.Url.Scheme, req.Url.Host, req.Url.Path, p.Name, strMap))
 					//防止后续继续打印poc成功信息
 					return false, nil
 				}
@@ -438,7 +462,7 @@ func clustersend(oReq *http.Request, variableMap map[string]interface{}, req *Re
 	variableMap["response"] = resp
 	// 先判断响应页面是否匹配search规则
 	if rule.Search != "" {
-		result := doSearch(strings.TrimSpace(rule.Search), GetHeader(resp.Headers)+string(resp.Body))
+		result := doSearch(rule.Search, GetHeader(resp.Headers)+string(resp.Body))
 		if result != nil && len(result) > 0 { // 正则匹配成功
 			for k, v := range result {
 				variableMap[k] = v
@@ -511,7 +535,7 @@ func evalset1(env *cel.Env, variableMap map[string]interface{}, k string, expres
 
 func CheckInfoPoc(infostr string) string {
 	for _, poc := range info.PocDatas {
-		if strings.Compare(poc.Name, infostr) == 0 {
+		if strings.Contains(infostr, poc.Name) {
 			return poc.Alias
 		}
 	}

@@ -15,7 +15,6 @@ import (
 	"github.com/shadow1ng/fscan/common"
 	exprpb "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -30,6 +29,9 @@ func NewEnv(c *CustomLib) (*cel.Env, error) {
 }
 
 func Evaluate(env *cel.Env, expression string, params map[string]interface{}) (ref.Val, error) {
+	if expression == "" {
+		return types.Bool(true), nil
+	}
 	ast, iss := env.Compile(expression)
 	if iss.Err() != nil {
 		//fmt.Printf("compile: ", iss.Err())
@@ -105,7 +107,7 @@ func NewEnvOption() CustomLib {
 		cel.Declarations(
 			decls.NewIdent("request", decls.NewObjectType("lib.Request"), nil),
 			decls.NewIdent("response", decls.NewObjectType("lib.Response"), nil),
-			//decls.NewIdent("reverse", decls.NewObjectType("lib.Reverse"), nil),
+			decls.NewIdent("reverse", decls.NewObjectType("lib.Reverse"), nil),
 		),
 		cel.Declarations(
 			// functions
@@ -561,7 +563,7 @@ func randomString(n int) string {
 }
 
 func reverseCheck(r *Reverse, timeout int64) bool {
-	if ceyeApi == "" || r.Domain == "" {
+	if ceyeApi == "" || r.Domain == "" || !common.DnsLog {
 		return false
 	}
 	time.Sleep(time.Second * time.Duration(timeout))
@@ -575,6 +577,7 @@ func reverseCheck(r *Reverse, timeout int64) bool {
 	}
 
 	if !bytes.Contains(resp.Body, []byte(`"data": []`)) && bytes.Contains(resp.Body, []byte(`"message": "OK"`)) { // api返回结果不为空
+		fmt.Println(urlStr)
 		return true
 	}
 	return false
@@ -624,8 +627,8 @@ func DoRequest(req *http.Request, redirect bool) (*Response, error) {
 	defer oResp.Body.Close()
 	resp, err := ParseResponse(oResp)
 	if err != nil {
-		common.LogError("[-]ParseResponse error: " + err.Error())
-		return nil, err
+		common.LogError("[-] ParseResponse error: " + err.Error())
+		//return nil, err
 	}
 	return resp, err
 }
@@ -654,12 +657,12 @@ func ParseRequest(oReq *http.Request) (*Request, error) {
 	req.ContentType = oReq.Header.Get("Content-Type")
 	if oReq.Body == nil || oReq.Body == http.NoBody {
 	} else {
-		data, err := ioutil.ReadAll(oReq.Body)
+		data, err := io.ReadAll(oReq.Body)
 		if err != nil {
 			return nil, err
 		}
 		req.Body = data
-		oReq.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+		oReq.Body = io.NopCloser(bytes.NewBuffer(data))
 	}
 	return req, nil
 }
@@ -674,43 +677,21 @@ func ParseResponse(oResp *http.Response) (*Response, error) {
 	}
 	resp.Headers = header
 	resp.ContentType = oResp.Header.Get("Content-Type")
-	body, err := getRespBody(oResp)
-	if err != nil {
-		return nil, err
-	}
+	body, _ := getRespBody(oResp)
 	resp.Body = body
 	return &resp, nil
 }
 
-func getRespBody(oResp *http.Response) ([]byte, error) {
-	var body []byte
-	if oResp.Header.Get("Content-Encoding") == "gzip" {
-		gr, err := gzip.NewReader(oResp.Body)
-		if err != nil {
-			if err == io.EOF {
-				err = nil
-			}
-			return nil, err
+func getRespBody(oResp *http.Response) (body []byte, err error) {
+	body, err = io.ReadAll(oResp.Body)
+	if strings.Contains(oResp.Header.Get("Content-Encoding"), "gzip") {
+		reader, err1 := gzip.NewReader(bytes.NewReader(body))
+		if err1 == nil {
+			body, err = io.ReadAll(reader)
 		}
-		defer gr.Close()
-		for {
-			buf := make([]byte, 1024)
-			n, err := gr.Read(buf)
-			if err != nil && err != io.EOF {
-				return nil, err
-			}
-			if n == 0 {
-				break
-			}
-			body = append(body, buf...)
-		}
-	} else {
-		raw, err := ioutil.ReadAll(io.LimitReader(oResp.Body, 10240))
-		if err != nil {
-			return nil, err
-		}
-		defer oResp.Body.Close()
-		body = raw
 	}
-	return body, nil
+	if err == io.EOF {
+		err = nil
+	}
+	return
 }
